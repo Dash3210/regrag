@@ -1,0 +1,40 @@
+# Virtual environments
+.venv/
+
+# Python caches & bytecode
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Coverage artefacts
+.coverage
+coverage.xml
+htmlcov/
+
+# Environment & logs
+.env
+.env.*
+*.log
+
+# Build & packaging
+dist/
+build/
+*.egg-info/
+
+# OS metadata
+.DS_Store
+
+# Corpus, caches, indexes & binary data (never commit raw PDFs or built indexes)
+data/raw/
+data/cache/
+data/index/
+*.pdf
+*.sqlite
+*.sqlite3
+*.db
+*.npy
+
+# Throwaway spike scripts
+spike/
