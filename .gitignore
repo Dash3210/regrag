@@ -28,6 +28,7 @@ build/
 
 # Corpus, caches, indexes & binary data (never commit raw PDFs or built indexes)
 data/raw/
+data/processed/
 data/cache/
 data/index/
 *.pdf

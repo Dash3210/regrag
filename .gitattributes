@@ -1,0 +1,7 @@
+# Pin deterministic LF line endings across Windows/Linux clones so
+# manifest_sha256 and generated text/JSONL hashes remain invariant.
+corpus/manifest.json text eol=lf
+*.json text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+Makefile text eol=lf

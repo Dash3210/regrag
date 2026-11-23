@@ -1,0 +1,58 @@
+{
+  "manifest_version": 1,
+  "corpus_name": "fia-f1-regulations",
+  "documents": [
+    {
+      "doc_id": "fia_2024_technical",
+      "year": 2024,
+      "doc_type": "technical",
+      "issue": "Issue 8",
+      "published_date": "2024-10-17",
+      "title": "2024 Formula 1 Technical Regulations",
+      "filename": "fia_2024_f1_technical_regulations_iss8.pdf",
+      "url": "https://www.fia.com/sites/default/files/fia_2024_formula_1_technical_regulations_-_issue_8_-_2024-10-17.pdf",
+      "sha256": "a940dd6c01b058c17f8da5392fb20b497b8967848c1c62905453b955b6d58c18",
+      "expected_bytes": 2247377,
+      "expected_pages": 178
+    },
+    {
+      "doc_id": "fia_2025_technical",
+      "year": 2025,
+      "doc_type": "technical",
+      "issue": "Issue 3",
+      "published_date": "2025-04-07",
+      "title": "2025 Formula 1 Technical Regulations",
+      "filename": "fia_2025_f1_technical_regulations_iss03.pdf",
+      "url": "https://www.fia.com/sites/default/files/documents/fia_2025_formula_1_technical_regulations_-_issue_03_-_2025-04-07.pdf",
+      "sha256": "454b76e2b388e61db50c0d116ff59477848a0b7e081f38142242808213dc0826",
+      "expected_bytes": 2242504,
+      "expected_pages": 179
+    },
+    {
+      "doc_id": "fia_2024_sporting",
+      "year": 2024,
+      "doc_type": "sporting",
+      "issue": "Issue 7",
+      "published_date": "2024-07-31",
+      "title": "2024 Formula One Sporting Regulations",
+      "filename": "fia_2024_f1_sporting_regulations_iss7.pdf",
+      "url": "https://www.fia.com/sites/default/files/fia_2024_formula_1_sporting_regulations_-_issue_7_-_2024-07-31.pdf",
+      "sha256": "82f8048dcc2c86c26e8d69321f2700ea9b274346e28bade43815dea31a3993a3",
+      "expected_bytes": 1713401,
+      "expected_pages": 107
+    },
+    {
+      "doc_id": "fia_2025_sporting",
+      "year": 2025,
+      "doc_type": "sporting",
+      "issue": "Issue 5",
+      "published_date": "2025-04-30",
+      "title": "2025 Formula One Sporting Regulations",
+      "filename": "fia_2025_f1_sporting_regulations_iss5.pdf",
+      "url": "https://www.fia.com/system/files/documents/fia_2025_formula_1_sporting_regulations_-_issue_5_-_2025-04-30.pdf",
+      "sha256": "525eef22a60f0755a4468281dd7c78c5ea5bd0eec38dc1b09cc31a0c0132854e",
+      "expected_bytes": 1294826,
+      "expected_pages": 119
+    }
+  ]
+}

@@ -74,3 +74,42 @@
 - Alternatives rejected:
   - `mcc_icc_cricket_fallback` (`0.3013`): MCC Laws of Cricket + ICC Playing Conditions was designated solely as a fallback in case `fia.com` blocked automated downloads; unnecessary once both official FIA PDFs downloaded cleanly with HTTP 200 and demonstrated dense numeric tables and year-on-year rule changes.
 
+## ADR-006 — Corpus scope: 4 FIA PDFs (2024 & 2025 Technical + Sporting)
+- Status: accepted
+- Date: 2026-11-21
+- Context: Expanding from the 2-PDF P0 spike to the full P1 corpus requires balancing cross-document retrieval realism (Technical <-> Sporting cross-references and year-on-year rule deltas) against deterministic parsing structure, offline CPU evaluation latency, and reserving an out-of-corpus season for abstention testing.
+- Decision: Lock `corpus/manifest.json` (`fia-f1-regulations`, `manifest_version=1`) to **4 verified FIA Formula 1 PDFs** covering 2024 & 2025 Technical and Sporting Regulations (583 pages total). Evaluated via `clm_decide`:
+  - Selected: `option_a_4_pdfs_2024_2025_tech_sporting` (confidence `0.3434`)
+  - Candidate probabilities: `option_a_4_pdfs_2024_2025_tech_sporting=0.5623`, `option_b_2_pdfs_tech_only=0.4058`, `option_c_6_pdfs_2024_2025_2026=0.0319`.
+- Verified Manifest Provenance (`corpus/manifest.json`, gitignored `data/raw/`):
+  - `fia_2024_technical` (`Issue 8`, `2024-10-17`): 2,247,377 bytes, 178 pages, SHA-256 `a940dd6c01b058c17f8da5392fb20b497b8967848c1c62905453b955b6d58c18`.
+  - `fia_2025_technical` (`Issue 3`, `2025-04-07`): 2,242,504 bytes, 179 pages, SHA-256 `454b76e2b388e61db50c0d116ff59477848a0b7e081f38142242808213dc0826`.
+  - `fia_2024_sporting` (`Issue 7`, `2024-07-31`): 1,713,401 bytes, 107 pages, SHA-256 `82f8048dcc2c86c26e8d69321f2700ea9b274346e28bade43815dea31a3993a3`.
+  - `fia_2025_sporting` (`Issue 5`, `2025-04-30`): 1,294,826 bytes, 119 pages, SHA-256 `525eef22a60f0755a4468281dd7c78c5ea5bd0eec38dc1b09cc31a0c0132854e`.
+- Rationale & Consequences:
+  1. Preserves consistent `Article N.M.K` clause hierarchy across both seasons and both document families while exercising genuine Technical <-> Sporting cross-references.
+  2. Keeps full corpus parsing (~78s on CPU), indexing, and offline evaluation fast on standard developer hardware.
+  3. Keeps 2026 regulations out of the indexed corpus so P2/P3 evaluation can test true missing-year abstention ("What is the 2026 minimum weight?") without synthetic redaction.
+- Alternatives rejected:
+  - `option_b_2_pdfs_tech_only` (`0.4058`): omits Sporting Regulations, forfeiting real cross-document references (`Sporting Regulations` / `Technical Regulations`) and multi-doc-type filtering.
+  - `option_c_6_pdfs_2024_2025_2026` (`0.0319`): 2026 introduces a restructured regulatory taxonomy and removes the clean missing-year abstention test target while increasing CPU indexing time.
+
+## ADR-007 — Parsed corpus contract: clauses.jsonl + pages.jsonl + parse_summary.json under gitignored data/processed/
+- Status: accepted
+- Date: 2026-11-21
+- Context: Phase P1 produces parsed text from raw PDFs, while Phase P2 builds both a clause-aware retrieval index and a fixed-size chunk baseline for P3 ablation. If the two chunking strategies operated on differently cleaned text streams, or if P1 coupled directly to P2's SQLite schema, ablation comparisons would be confounded and phase boundaries blurred.
+- Decision: Emit three deterministic, atomically written files under gitignored `data/processed/`:
+  1. `clauses.jsonl`: one sorted-key JSON record per `ClauseRecord` with unique `chunk_id`, hierarchical breadcrumb, Markdown tables, extracted cross-references, `section_kind` (`normative` / `appendix` / `amendment_preview`), `has_diagram`, and `source_sha256`.
+  2. `pages.jsonl`: one sorted-key JSON record per `CleanedPage` produced by the exact same footer-stripped, non-black-strikethrough-filtered, subscript-repaired pipeline.
+  3. `parse_summary.json`: per-document and aggregate page/clause/table/diagram statistics plus deterministic SHA-256 digests of `clauses.jsonl`, `pages.jsonl`, and `corpus/manifest.json`.
+  Evaluated via `clm_decide`:
+  - Selected: `option_a_jsonl_clause_and_doc_stream` (confidence `0.7619`)
+  - Candidate probabilities: `option_a_jsonl_clause_and_doc_stream=0.8412`, `option_b_clauses_jsonl_only=0.1382`, `option_c_sqlite_directly=0.0206`.
+- Rationale & Consequences:
+  1. **Fair fixed-vs-clause ablation**: P2's fixed-chunk baseline consumes `pages.jsonl` while the clause-aware index consumes `clauses.jsonl`, guaranteeing both share identical text cleaning and strikethrough filtering.
+  2. **Clean P1/P2 boundary**: P1 owns deterministic PDF-to-JSONL normalization under gitignored `data/processed/`; P2 owns SQLite FTS5 and dense vector indexing under `data/index/`.
+  3. **Inspectable determinism**: Repeat runs of `regrag parse` produce bitwise-identical `clauses.jsonl` and `pages.jsonl` SHA-256 digests.
+- Alternatives rejected:
+  - `option_b_clauses_jsonl_only` (`0.1382`): forces P2's fixed-chunk baseline either to re-parse PDFs (duplicating cleaning logic) or concatenate clause chunks (confounding clause boundaries into the baseline).
+  - `option_c_sqlite_directly` (`0.0206`): couples P1 parsing to P2 storage schema and breaks human-inspectable line-oriented JSONL diffs.
+
