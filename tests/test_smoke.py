@@ -18,8 +18,9 @@ import pytest
 
 import regrag
 from regrag import _phase, cli
-from regrag.corpus.fetch import ChecksumMismatchError, FetchError, FetchResult
+from regrag.corpus.fetch import ChecksumMismatchError, FetchError, FetchResult, ManifestError
 from regrag.corpus.parse import ParseError, ParseReport
+from regrag.index.build import IndexBuildError, IndexIntegrityError, IndexReport
 
 
 def _build_minimal_pdf(lines: list[str]) -> bytes:
@@ -105,7 +106,13 @@ def test_cli_empty_args_exits_two() -> None:
 
 @pytest.mark.parametrize(
     "argv",
-    [["--help"], ["version", "--help"], ["fetch", "--help"], ["parse", "--help"]],
+    [
+        ["--help"],
+        ["version", "--help"],
+        ["fetch", "--help"],
+        ["parse", "--help"],
+        ["index", "--help"],
+    ],
 )
 def test_cli_help_exits_zero(argv: list[str], capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exc_info:
@@ -205,6 +212,9 @@ def test_cli_fetch_and_parse_missing_manifest_error_paths(
 
     assert cli.main(["parse", "--manifest", str(missing)]) == 1
     assert "regrag parse:" in capsys.readouterr().err
+
+    assert cli.main(["index", "--manifest", str(missing)]) == 1
+    assert "regrag index:" in capsys.readouterr().err
 
 
 def test_cli_parse_end_to_end_with_synthetic_pdf(
@@ -339,6 +349,110 @@ def test_cli_parse_error_returns_one(
     assert "missing raw PDF" in captured.err
 
 
+def test_cli_index_forwards_flags_and_prints_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured_kwargs: dict[str, Any] = {}
+    manifest = tmp_path / "manifest.json"
+    processed_dir = tmp_path / "processed"
+    index_dir = tmp_path / "index"
+
+    def fake_build_index(**kwargs: Any) -> IndexReport:
+        captured_kwargs.update(kwargs)
+        return IndexReport(
+            schema_version=1,
+            corpus_name="fia-f1-regulations",
+            manifest_sha256="a" * 64,
+            clauses_sha256="b" * 64,
+            pages_sha256="c" * 64,
+            index_sqlite_sha256="d" * 64,
+            content_sha256="e" * 64,
+            embedder_model="custom/e5-test",
+            embedding_dim=384,
+            clause_count=412,
+            fixed_chunk_count=128,
+            fixed_chunk_words=250,
+            fixed_overlap_words=50,
+            available_years=(2024, 2025),
+            available_doc_types=("sporting", "technical"),
+            available_section_kinds=("appendix", "normative"),
+            index_dir=index_dir,
+            sqlite_path=index_dir / "index.sqlite",
+            meta_path=index_dir / "index_meta.json",
+        )
+
+    monkeypatch.setattr(cli, "build_index", fake_build_index)
+
+    code = cli.main(
+        [
+            "index",
+            "--manifest",
+            str(manifest),
+            "--processed-dir",
+            str(processed_dir),
+            "--index-dir",
+            str(index_dir),
+            "--embedder",
+            "custom/e5-test",
+            "--batch-size",
+            "32",
+            "--fixed-chunk-words",
+            "250",
+            "--fixed-overlap-words",
+            "50",
+        ]
+    )
+    assert code == 0
+    assert captured_kwargs == {
+        "processed_dir": processed_dir,
+        "manifest_path": manifest,
+        "index_dir": index_dir,
+        "embedder_model": "custom/e5-test",
+        "batch_size": 32,
+        "fixed_chunk_words": 250,
+        "fixed_overlap_words": 50,
+    }
+    out_lines = capsys.readouterr().out.strip().splitlines()
+    assert len(out_lines) == 1
+    out = out_lines[0]
+    assert "412 clauses" in out
+    assert "128 fixed chunks" in out
+    assert f"content_sha256={'e' * 12}" in out
+    assert f"index_sqlite_sha256={'d' * 12}" in out
+    assert str(index_dir / "index.sqlite") in out
+    assert str(index_dir / "index_meta.json") in out
+
+
+@pytest.mark.parametrize(
+    ("exc_factory", "expected_msg"),
+    [
+        (lambda: IndexBuildError("corrupt clauses.jsonl"), "corrupt clauses.jsonl"),
+        (lambda: IndexIntegrityError("FTS5 row mismatch"), "FTS5 row mismatch"),
+        (lambda: ManifestError("bad manifest schema"), "bad manifest schema"),
+        (lambda: ValueError("batch_size must be a positive integer"), "batch_size must be"),
+    ],
+)
+def test_cli_index_errors_return_one(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    exc_factory: Any,
+    expected_msg: str,
+) -> None:
+    def failing_build_index(**kwargs: Any) -> IndexReport:
+        raise exc_factory()
+
+    monkeypatch.setattr(cli, "build_index", failing_build_index)
+
+    code = cli.main(["index", "--index-dir", str(tmp_path / "index")])
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "regrag index:" in captured.err
+    assert expected_msg in captured.err
+
+
 def test_run_module_as_main(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -373,7 +487,7 @@ def test_python_m_regrag_version_subprocess() -> None:
     assert proc.stdout.strip() == f"regrag {regrag.__version__}"
 
 
-def test_python_m_regrag_cli_version_and_index_subprocess() -> None:
+def test_python_m_regrag_cli_version_and_phase_gate_subprocess() -> None:
     version_proc = subprocess.run(
         [sys.executable, "-m", "regrag.cli", "version"],
         check=False,
@@ -383,16 +497,16 @@ def test_python_m_regrag_cli_version_and_index_subprocess() -> None:
     assert version_proc.returncode == 0
     assert version_proc.stdout.strip() == f"regrag {regrag.__version__}"
 
-    index_proc = subprocess.run(
-        [sys.executable, "-m", "regrag.cli", "index"],
+    eval_proc = subprocess.run(
+        [sys.executable, "-m", "regrag.cli", "eval"],
         check=False,
         capture_output=True,
         text=True,
     )
-    assert index_proc.returncode != 0
-    combined = index_proc.stdout + index_proc.stderr
-    assert "P2" in combined
-    assert "index" in combined
+    assert eval_proc.returncode != 0
+    combined = eval_proc.stdout + eval_proc.stderr
+    assert "P3" in combined
+    assert "eval" in combined
 
 
 def test_console_script_entry_point() -> None:
@@ -402,7 +516,7 @@ def test_console_script_entry_point() -> None:
     assert matches[0].value == "regrag.cli:main"
 
 
-def test_installed_console_script_executable() -> None:
+def test_installed_console_script_version_and_phase_gate() -> None:
     script_name = "regrag.exe" if sys.platform == "win32" else "regrag"
     script_path = Path(sys.executable).parent / script_name
     assert script_path.is_file(), f"Expected installed console script at {script_path}"
@@ -416,16 +530,16 @@ def test_installed_console_script_executable() -> None:
     assert version_proc.returncode == 0
     assert version_proc.stdout.strip() == f"regrag {regrag.__version__}"
 
-    index_proc = subprocess.run(
-        [str(script_path), "index"],
+    eval_proc = subprocess.run(
+        [str(script_path), "eval"],
         check=False,
         capture_output=True,
         text=True,
     )
-    assert index_proc.returncode != 0
-    combined = index_proc.stdout + index_proc.stderr
-    assert "P2" in combined
-    assert "index" in combined
+    assert eval_proc.returncode != 0
+    combined = eval_proc.stdout + eval_proc.stderr
+    assert "P3" in combined
+    assert "eval" in combined
 
 
 def test_makefile_help_and_docker_phase_gate(repo_root: Path) -> None:
@@ -470,7 +584,6 @@ def test_cli_unknown_subcommand_exits_two() -> None:
 @pytest.mark.parametrize(
     ("subcommand", "expected_phase"),
     [
-        ("index", "P2"),
         ("eval", "P3"),
         ("gate-negative", "P3"),
         ("serve", "P4"),
@@ -493,9 +606,12 @@ def test_cli_unimplemented_subcommands_raise_phase_exit(
         "regrag.corpus",
         "regrag.corpus.fetch",
         "regrag.corpus.parse",
+        "regrag.index",
+        "regrag.index.build",
+        "regrag.retrieve",
     ],
 )
-def test_implemented_p1_corpus_modules_export_public_api(module_name: str) -> None:
+def test_implemented_modules_export_public_api(module_name: str) -> None:
     mod = importlib.import_module(module_name)
     exported = getattr(mod, "__all__", None)
     assert isinstance(exported, list) and len(exported) > 0
@@ -506,9 +622,6 @@ def test_implemented_p1_corpus_modules_export_public_api(module_name: str) -> No
 @pytest.mark.parametrize(
     ("module_name", "expected_phase"),
     [
-        ("regrag.index", "P2"),
-        ("regrag.index.build", "P2"),
-        ("regrag.retrieve", "P2"),
         ("regrag.answer", "P3"),
         ("regrag.eval", "P3"),
         ("regrag.eval.metrics", "P3"),
@@ -525,9 +638,9 @@ def test_stub_modules_expose_empty_all(module_name: str, expected_phase: str) ->
 
 def test_phase_todo_message_content() -> None:
     with pytest.raises(SystemExit) as exc_info:
-        _phase.todo("P2", "index")
+        _phase.todo("P3", "eval")
     message = str(exc_info.value)
     assert "regrag:" in message
-    assert "P2" in message
-    assert "index" in message
+    assert "P3" in message
+    assert "eval" in message
     assert "see README status table" in message

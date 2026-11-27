@@ -113,3 +113,53 @@
   - `option_b_clauses_jsonl_only` (`0.1382`): forces P2's fixed-chunk baseline either to re-parse PDFs (duplicating cleaning logic) or concatenate clause chunks (confounding clause boundaries into the baseline).
   - `option_c_sqlite_directly` (`0.0206`): couples P1 parsing to P2 storage schema and breaks human-inspectable line-oriented JSONL diffs.
 
+## ADR-008 — CPU dense embedding model: `intfloat/e5-small-v2` (MIT)
+- Status: accepted
+- Date: 2026-11-27
+- Context: Phase P2 requires a compact, permissively licensed dense text embedding model that runs deterministically on local CPU hardware without GPU dependencies or paid APIs, while preserving high retrieval accuracy on asymmetric regulatory questions versus dense technical clauses and numeric-limit tables.
+- Decision: Standardize on **`intfloat/e5-small-v2`** (33M parameters, 384-dimensional embeddings, MIT license) using L2-normalized embeddings and E5's asymmetric `"passage: "` (index time) and `"query: "` (query time) prefixes, wrapped behind an injectable `DenseEncoder` protocol so unit tests run completely offline without model downloads. Evaluated via `clm_decide`:
+  - Selected: `option_c_e5_small_v2` (confidence `0.8816`)
+  - Candidate probabilities: `option_c_e5_small_v2=0.9211`, `option_b_all_minilm_l6_v2=0.0694`, `option_a_bge_small_en_v1_5=0.0095`.
+- Consequences:
+  1. Permissive MIT licensing matches `regrag` end-to-end while keeping the dense model footprint compact (~33M params, 384 dims) for fast local CPU indexing and query latency.
+  2. Asymmetric `"passage: "` / `"query: "` prefixing aligns short regulatory queries with longer multi-sentence clauses and Markdown tables, and L2 normalization makes cosine similarity equivalent to a single dot product.
+  3. Isolating encoding behind the injectable `DenseEncoder` protocol keeps the unit test suite deterministic, fast, and 100% offline.
+- Alternatives rejected:
+  - `sentence-transformers/all-MiniLM-L6-v2` (`option_b_all_minilm_l6_v2`, `0.0694`): smaller 22M symmetric encoder with weaker asymmetric retrieval precision on dense technical prose.
+  - `BAAI/bge-small-en-v1.5` (`option_a_bge_small_en_v1_5`, `0.0095`): strong alternative, but `intfloat/e5-small-v2` was preferred by `clm_decide` for asymmetric passage/query retrieval balance and established CPU behavior.
+
+## ADR-009 — Hybrid retrieval fusion and CPU reranking: RRF (`k=60`) + `cross-encoder/ms-marco-MiniLM-L-6-v2`
+- Status: accepted
+- Date: 2026-11-27
+- Context: Regulatory queries mix exact clause/identifier lookups (e.g., `Article 4.1`, `798kg`, `X_A`) where lexical BM25 excels with semantic paraphrases where dense retrieval excels. Combining incompatible BM25 and cosine score scales directly via linear weights is brittle across queries, while P3 ablation requires cleanly separating fixed-chunk, clause-chunk, lexical, dense, hybrid, and reranked retrieval modes alongside strict version/section isolation and reliable abstention.
+- Decision: Implement Reciprocal Rank Fusion (**RRF**, `k=60`, equal lexical and dense weights `1.0`) across **5 retrieval configurations** (`bm25_fixed`, `bm25_clause`, `dense_clause`, `hybrid_rrf`, `hybrid_rerank`), paired with an optional CPU CrossEncoder **`cross-encoder/ms-marco-MiniLM-L-6-v2`** (~22M parameters, Apache-2.0 license) behind an injectable `Reranker` protocol reranking the top-20 RRF-fused candidates. Enforce strict SQL pre-filter version/section isolation (never post-filtering) and calibrated abstention thresholds. Evaluated via `clm_decide`:
+  - Selected: `option_a_rrf_k60_plus_ms_marco_minilm_l6_v2` (confidence `0.6918`)
+  - Candidate probabilities: `option_a_rrf_k60_plus_ms_marco_minilm_l6_v2=0.7945`, `option_b_rrf_k60_plus_bge_reranker_base=0.2048`, `option_c_weighted_linear_score_fusion_no_cross_encoder=0.0007`.
+- Consequences:
+  1. Rank-based RRF (`k=60`) fuses BM25 and dense cosine rankings without brittle per-query score normalization or tuning drift.
+  2. Reranking only the top-20 fused candidates with the lightweight ~22M-parameter Apache-2.0 CrossEncoder improves top-k precision while keeping CPU query latency practical, and the injectable `Reranker` protocol keeps tests offline and deterministic.
+  3. Exposing all 5 retrieval modes (`bm25_fixed`, `bm25_clause`, `dense_clause`, `hybrid_rrf`, `hybrid_rerank`) enables apples-to-apples P3 ablation, while strict pre-filter version/section isolation prevents cross-season or `amendment_preview` leakage and calibrated abstention gates out-of-corpus queries.
+- Alternatives rejected:
+  - RRF (`k=60`) + `BAAI/bge-reranker-base` (`option_b_rrf_k60_plus_bge_reranker_base`, `0.2048`): ~278M-parameter reranker adds roughly an order of magnitude more CPU latency per query on local developer hardware.
+  - Weighted linear score fusion without a cross-encoder (`option_c_weighted_linear_score_fusion_no_cross_encoder`, `0.0007`): suffers from uncalibrated BM25-vs-cosine score scales and forfeits cross-attention reranking gains for fine-grained regulatory disambiguation.
+
+## ADR-010 — Local index storage layout and fixed-chunk baseline: single atomic SQLite DB (`index.sqlite`) + `index_meta.json`
+- Status: accepted
+- Date: 2026-11-27
+- Context: Phase P2 must store both clause-aware chunks (with FTS5 lexical search and dense vector embeddings) and a fixed-size chunk baseline (derived from P1's `pages.jsonl`) locally at `$0` cost, with atomic rebuilds, deterministic provenance digests, and zero risk of split-file drift between metadata, lexical indexes, and dense vectors.
+- Decision: Persist the complete retrieval index in a **single atomic SQLite database** (`data/index/index.sqlite`) paired with an atomically written provenance sidecar (`data/index/index_meta.json`):
+  1. `data/index/index.sqlite` contains:
+     - `index_info`: index configuration, schema/model metadata, and provenance fields.
+     - `chunks_clause` + external-content FTS5 virtual table `chunks_clause_fts` (`porter unicode61` tokenizer) + packed little-endian `<f4` L2-normalized `embedding_blob` vectors.
+     - `chunks_fixed` + external-content FTS5 virtual table `chunks_fixed_fts` (`porter unicode61` tokenizer), built deterministically from `data/processed/pages.jsonl` using `300`-word windows with `60`-word overlap.
+  2. `data/index/index_meta.json` records `manifest_sha256`, `clauses_sha256`, `pages_sha256`, `index_sqlite_sha256`, and `content_sha256` for end-to-end reproducibility and staleness checks.
+  Evaluated via `clm_decide`:
+  - Selected: `option_b_sqlite_only_with_blob_embeddings` (confidence `0.8255`)
+  - Candidate probabilities: `option_b_sqlite_only_with_blob_embeddings=0.8837`, `option_a_sqlite_fts5_plus_npy_and_meta_json=0.1042`, `option_c_separate_sqlite_per_year=0.0121`.
+- Consequences:
+  1. Storing `<f4` L2-normalized `embedding_blob` rows alongside `chunks_clause` inside one SQLite file eliminates row-order or stale-file desynchronization between FTS5 tables and dense embeddings, and enables atomic temp-file-and-rename index swaps.
+  2. Hosting `chunks_fixed` / `chunks_fixed_fts` (`300`-word windows, `60`-word overlap from `pages.jsonl`) in the same database guarantees fair, single-artifact P3 ablation against `chunks_clause`.
+  3. Recording `manifest_sha256`, `clauses_sha256`, `pages_sha256`, `index_sqlite_sha256`, and `content_sha256` in `data/index/index_meta.json` gives P3/P4 fast integrity verification without opening or hashing external vector sidecars.
+- Alternatives rejected:
+  - SQLite FTS5 + separate `.npy` embedding array + `meta.json` (`option_a_sqlite_fts5_plus_npy_and_meta_json`, `0.1042`): splits coupled rows across multiple files, complicating atomic replacement and risking silent index-to-vector row misalignment.
+  - Separate SQLite database per season/year (`option_c_separate_sqlite_per_year`, `0.0121`): fragments cross-year queries and schema/provenance management when indexed pre-filter columns in a single database already enforce strict season isolation cleanly.

@@ -1,4 +1,4 @@
-"""Repository hygiene and P0/P1 evaluation integrity checks."""
+"""Repository hygiene and P0/P1/P2 evaluation integrity checks."""
 
 from __future__ import annotations
 
@@ -252,7 +252,7 @@ def test_decisions_doc_contains_adrs_and_corpus_provenance(repo_root: Path) -> N
     assert decisions_path.is_file(), "docs/decisions.md must exist"
 
     content = decisions_path.read_text(encoding="utf-8")
-    for adr_num in ("001", "002", "003", "004", "005", "006", "007"):
+    for adr_num in ("001", "002", "003", "004", "005", "006", "007", "008", "009", "010"):
         assert re.search(rf"^## ADR-{adr_num}\b", content, flags=re.MULTILINE), (
             f"Missing '## ADR-{adr_num}' heading in docs/decisions.md"
         )
@@ -278,6 +278,26 @@ def test_decisions_doc_contains_adrs_and_corpus_provenance(repo_root: Path) -> N
     adr_007_section = _extract_markdown_section(content, "## ADR-007", level=2)
     for required_token in ("clauses.jsonl", "pages.jsonl", "parse_summary.json", "data/processed/"):
         assert required_token in adr_007_section, f"ADR-007 missing {required_token!r}"
+
+    for adr_id, expected_tokens in (
+        ("ADR-008", ("Status: accepted", "intfloat/e5-small-v2")),
+        (
+            "ADR-009",
+            (
+                "Status: accepted",
+                "cross-encoder/ms-marco-MiniLM-L-6-v2",
+                "bm25_fixed",
+                "bm25_clause",
+                "dense_clause",
+                "hybrid_rrf",
+                "hybrid_rerank",
+            ),
+        ),
+        ("ADR-010", ("Status: accepted", "index.sqlite", "index_meta.json")),
+    ):
+        section = _extract_markdown_section(content, f"## {adr_id}", level=2)
+        for token in expected_tokens:
+            assert token in section, f"{adr_id} missing required token {token!r}"
 
 
 def test_p0_corpus_spike_has_30_hand_verified_clauses(repo_root: Path) -> None:
@@ -614,6 +634,10 @@ def test_readme_contains_phase_status_table_and_corpus_links(repo_root: Path) ->
         assert phase in content, f"Phase Status Table missing row for {phase}"
     assert "docs/p0-corpus-spike.md" in content, "README.md must link docs/p0-corpus-spike.md"
     assert "docs/p1-parse-accuracy.md" in content, "README.md must link docs/p1-parse-accuracy.md"
+    assert "docs/p2-index-retrieval.md" in content, (
+        "README.md must link docs/p2-index-retrieval.md"
+    )
+    assert "make index" in content, "README.md must document make index"
     assert "docs/decisions.md" in content, "README.md must link docs/decisions.md"
     assert "corpus/manifest.json" in content, "README.md must link corpus/manifest.json"
     assert "FIA Formula 1" in content, "README.md must name the FIA Formula 1 corpus"

@@ -10,7 +10,7 @@ Citation-grounded retrieval and evaluation over multi-year **FIA Formula 1 Techn
 |---|---|---|
 | P0 | Setup & 30-Clause Corpus Spike | Complete |
 | P1 | Corpus Fetch & Clause-Aware Parser | Complete |
-| P2 | Hybrid Index, Retrieval & Version-Isolation Guards | Planned |
+| P2 | Hybrid Index, Retrieval & Version-Isolation Guards | Complete |
 | P3 | Three Answer Modes, 150-Question Eval Harness & Ablation Gate | Planned |
 | P4 | FastAPI Service, Static Query UI & Observability | Planned |
 | P5 | Containerisation & CI Gate | Planned |
@@ -54,6 +54,20 @@ Or invoke the P1 CLI subcommands directly (both accept `--manifest`, `--raw-dir`
 
 > **Note:** Running `regrag parse --doc-id <id>` without a separate `--processed-dir` overwrites `data/processed/clauses.jsonl`, `pages.jsonl`, and `parse_summary.json` with only the selected document(s). Pass `--processed-dir <dir>` when inspecting a subset.
 
+Build the local SQLite FTS5 lexical + dense embedding index (`index.sqlite` and `index_meta.json`) under gitignored `data/index/`:
+
+```sh
+make index
+```
+
+Or invoke `regrag index` directly (supports `--manifest`, `--processed-dir`, `--index-dir`, `--embedder`, `--batch-size`, `--fixed-chunk-words`, and `--fixed-overlap-words`; defaults to `intfloat/e5-small-v2`, `300`-word fixed chunks with `60`-word overlap):
+
+```sh
+.venv/bin/regrag index            # Linux / macOS (writes data/index/index.sqlite & index_meta.json)
+.venv/Scripts/regrag.exe index    # Windows (Git Bash / MSYS2)
+.venv\Scripts\regrag.exe index    # Windows (cmd.exe / PowerShell)
+```
+
 Run the full verification suite (`lint`, `typecheck`, `test`, `eval-integrity`):
 
 ```sh
@@ -68,7 +82,21 @@ Check the installed CLI version:
 .venv\Scripts\regrag.exe version  # Windows (cmd.exe / PowerShell)
 ```
 
-Unimplemented phase subcommands (`index`, `eval`, `gate-negative`, `serve`) and `make docker` (`P5`) intentionally fail loudly with the phase in which they arrive.
+Unimplemented phase subcommands (`eval`, `gate-negative`, `serve`) and `make docker` (`P5`) intentionally fail loudly with the phase in which they arrive.
+
+## Indexing & Retrieval Configurations (P2)
+
+`regrag index` persists both clause-aware chunks (`chunks_clause` + `chunks_clause_fts` + L2-normalized `<f4` `intfloat/e5-small-v2` embeddings) and the fixed-size sliding-window baseline (`chunks_fixed` + `chunks_fixed_fts`, built from `pages.jsonl`) inside a single atomic SQLite database (`data/index/index.sqlite`) with a SHA-256 provenance sidecar (`data/index/index_meta.json`).
+
+`regrag.retrieve` exposes **5 retrieval configurations** for apples-to-apples ablation, enforcing strict SQL pre-filter version/section isolation (excluding `amendment_preview` by default) and calibrated out-of-corpus abstention:
+
+| Config | Chunk Granularity | Scoring & Fusion |
+|---|---|---|
+| `bm25_fixed` | Fixed sliding-window chunks (`300` words, `60` overlap) | SQLite FTS5 BM25 |
+| `bm25_clause` | Clause-aware chunks | SQLite FTS5 BM25 |
+| `dense_clause` | Clause-aware chunks | Cosine similarity over `intfloat/e5-small-v2` embeddings |
+| `hybrid_rrf` | Clause-aware chunks | Reciprocal Rank Fusion (`k=60`) over BM25 + dense |
+| `hybrid_rerank` | Clause-aware chunks | `hybrid_rrf` top-20 reranked with `cross-encoder/ms-marco-MiniLM-L-6-v2` |
 
 ## Corpus Licensing & Provenance
 
@@ -76,7 +104,8 @@ The corpus comprises 4 official **FIA Formula 1 Technical & Sporting Regulations
 
 ## Documentation & Decisions
 
-- Architecture Decision Records (`ADR-001`–`ADR-007`): [docs/decisions.md](docs/decisions.md)
+- Architecture Decision Records (`ADR-001`–`ADR-010`, including P2 `ADR-008`–`ADR-010`): [docs/decisions.md](docs/decisions.md)
 - Phase P0 30-Clause PDF Corpus Spike: [docs/p0-corpus-spike.md](docs/p0-corpus-spike.md)
 - Phase P1 Parse Accuracy & 30-Clause Comparison Report: [docs/p1-parse-accuracy.md](docs/p1-parse-accuracy.md)
+- Phase P2 Hybrid Index & Retrieval Verification Report: [docs/p2-index-retrieval.md](docs/p2-index-retrieval.md)
 - Corpus Manifest (4 FIA PDFs with SHA-256 Provenance): [corpus/manifest.json](corpus/manifest.json)

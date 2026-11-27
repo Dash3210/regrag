@@ -21,9 +21,18 @@ from regrag.corpus.parse import (
     ParseError,
     parse_corpus,
 )
+from regrag.index.build import (
+    DEFAULT_BATCH_SIZE,
+    DEFAULT_EMBEDDER_MODEL,
+    DEFAULT_FIXED_CHUNK_WORDS,
+    DEFAULT_FIXED_OVERLAP_WORDS,
+    DEFAULT_INDEX_DIR,
+    IndexBuildError,
+    IndexIntegrityError,
+    build_index,
+)
 
 _UNIMPLEMENTED_PHASES: dict[str, str] = {
-    "index": "P2",
     "eval": "P3",
     "gate-negative": "P3",
     "serve": "P4",
@@ -31,7 +40,7 @@ _UNIMPLEMENTED_PHASES: dict[str, str] = {
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Construct the CLI argument parser with wired P1 and phase-gated subcommands."""
+    """Construct the CLI argument parser with wired P1/P2 and phase-gated subcommands."""
     parser = argparse.ArgumentParser(
         prog="regrag",
         description="Citation-grounded retrieval and evaluation over multi-year regulations.",
@@ -99,7 +108,53 @@ def build_parser() -> argparse.ArgumentParser:
         help="Restrict parsing to specific doc_id (repeatable).",
     )
 
-    subparsers.add_parser("index", help="Build local lexical and dense indexes (P2).")
+    index_parser = subparsers.add_parser(
+        "index",
+        help="Build local SQLite FTS5 lexical and dense embedding retrieval indexes.",
+    )
+    index_parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=DEFAULT_MANIFEST_PATH,
+        help="Path to the corpus manifest JSON file.",
+    )
+    index_parser.add_argument(
+        "--processed-dir",
+        type=Path,
+        default=DEFAULT_PROCESSED_DIR,
+        help="Directory containing parsed clauses.jsonl and pages.jsonl artifacts.",
+    )
+    index_parser.add_argument(
+        "--index-dir",
+        type=Path,
+        default=DEFAULT_INDEX_DIR,
+        help="Output directory for index.sqlite and index_meta.json.",
+    )
+    index_parser.add_argument(
+        "--embedder",
+        type=str,
+        default=DEFAULT_EMBEDDER_MODEL,
+        help="SentenceTransformer model identifier for dense clause embeddings.",
+    )
+    index_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=DEFAULT_BATCH_SIZE,
+        help="Batch size used during dense embedding encoding.",
+    )
+    index_parser.add_argument(
+        "--fixed-chunk-words",
+        type=int,
+        default=DEFAULT_FIXED_CHUNK_WORDS,
+        help="Word window size for the fixed-chunk baseline.",
+    )
+    index_parser.add_argument(
+        "--fixed-overlap-words",
+        type=int,
+        default=DEFAULT_FIXED_OVERLAP_WORDS,
+        help="Word overlap between consecutive fixed-size chunks.",
+    )
+
     subparsers.add_parser("eval", help="Run evaluation benchmark and gate (P3).")
     subparsers.add_parser("gate-negative", help="Run negative-control evaluation gate (P3).")
     subparsers.add_parser("serve", help="Run citation-grounded QA API service (P4).")
@@ -150,6 +205,31 @@ def _run_parse(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_index(args: argparse.Namespace) -> int:
+    try:
+        report = build_index(
+            processed_dir=args.processed_dir,
+            manifest_path=args.manifest,
+            index_dir=args.index_dir,
+            embedder_model=args.embedder,
+            batch_size=args.batch_size,
+            fixed_chunk_words=args.fixed_chunk_words,
+            fixed_overlap_words=args.fixed_overlap_words,
+        )
+    except (ManifestError, IndexBuildError, IndexIntegrityError, ValueError) as exc:
+        print(f"regrag index: {exc}", file=sys.stderr)
+        return 1
+
+    print(
+        f"Indexed {report.clause_count} clauses, {report.fixed_chunk_count} fixed chunks "
+        f"(embedder={report.embedder_model}, dim={report.embedding_dim}, "
+        f"content_sha256={report.content_sha256[:12]}, "
+        f"index_sqlite_sha256={report.index_sqlite_sha256[:12]}) -> "
+        f"{report.sqlite_path}, {report.meta_path}"
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entry point for regrag."""
     parser = build_parser()
@@ -162,6 +242,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_fetch(args)
     if args.subcommand == "parse":
         return _run_parse(args)
+    if args.subcommand == "index":
+        return _run_index(args)
 
     phase = _UNIMPLEMENTED_PHASES[args.subcommand]
     _phase.todo(phase, args.subcommand)
